@@ -1,0 +1,10 @@
+#!ipxe
+
+set server-ip 192.168.4.176
+
+:boot_deb
+kernel memdisk
+initrd http://${server-ip}/boot/deb/buster-headless.iso
+imargs memdisk iso raw
+boot || imgfree
+goto boot_deb

@@ -102,5 +102,10 @@ clean:
 mrproper: clean
 	rm -f ${TARGET}
 
+NETWORK_IP ?= 192.168.4.*
+get_ip := nmap $(NETWORK_IP) -p22 --open -oG - | awk '/22\/open.*/{print $$2}'
+
+get_hosts:
+	@$(get_ip)
 
 # EOF
