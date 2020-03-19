@@ -1,152 +1,46 @@
-# Debian headless/remote installation
+# Debian automatic PXE installation
 
-I wanted to do a headless installation for a server – i.e. without any keyboard
-access or the chance to peek at a temporarily connected screen. I found plenty
-of information on the net but none of the tutorials really worked for me. Some
-included preseeding the image but failed to automatically start the
-installation without a key press, others seemed to customize a zillion things
-but ended up getting stuck in some error message or other.
+## Disclaimer:
+#### The provided files are intended to be used in a didactic environment. Beware that this installer will install unconditionally, it will destroy all of your data on local hard-disk. We don't take any responsibility, use at your own risk. Don't use for a production environment, and buy a subscription for Proxmox if you use it for business.
 
-So I read my way through all of them and put together a slim working solution –
-at least working for me. So here is my minimal and lazy solution to debian
-headless installation image building.  I mostly documented it for myself but
-maybe it's useful for someone out there.
+### Description:
+Automatically install Debian 10 and Proxmox.
 
-I have tested this with Debian 9.5 (aka stretch) on an amd64 machine (Lenovo
-Thinkcentre Tiny m600). I think this should work with other versions (probably
-also ubuntu) and architectures but that is untested. If you have tested this
-please let me know and/or contribute code.
+- `chainload.kpxe` is an iPXE bootloader whose purpose is chainloading the customizable `chain.ipxe` script from `tftp://192.168.4.1/chain.ipxe` which is our tftp server, to change it you may need to recompile iPXE,  [see the official documentation here](https://ipxe.org/embed)
+- `chain.ipxe` loads the Linux kernel and initial ramdisk, plus some boot parameters, such as the `preseed.cfg` file and the hostname based on client's MAC address.
+- `preseed.cfg` is configured for a fully automated install, after which Proxmox gets installed, the server then is shut down instead of being rebooted to prevent installing again if you forget to disable PXE boot.
 
-At this point, this does not currently support UEFI boot! So make sure that you
-system will use legacy boot, by default.
+### Prerequisites:
+DHCP and tftp server up and running. For example, on OpenWRT follow these steps:
 
+- Assuming there is already external storage mounted under `/mnt/usb` and there is a directory `tftp` inside
+- Go to **Network** menu and then to **DHCP and DNS** submenu
+- Open **TFTP Settings** tab
+- Check **Enable TFTP server**
+- Write `/mnt/usb/tftp/` in **TFTP server root**
+- Write `chainload.kpxe` in **Network boot image**
 
-## In a nutshell
+Also, you have to provide your ssh public key to ssh in after reboot. This could be optional though, since there will be the Proxmox control panel available.
 
-    # Get a netinst image 
-    wget https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-9.5.0-amd64-netinst.iso
-    # Edit config.txt
-    vim config.txt
-    # Edit.create preseed-XXX.cfg 
-    vim preseed-XXX.cfg
-    # Build image
-    make image
-    # OPTIONAL: test iso image in qemu
-    make qemu
-    # Write image to usb stick
-    make usb
-    # optional: Add a FAT32 partition on the remaining free space
-    make FAT
+### Install procedure:
+
+Copy the files (or just clone the whole repo) `chainload.kpxe chain.ipxe build/initrd.gz linux` to the TFTP directory on the server/router. Assuming you have ssh root access to the router:
+
+	git clone https://github.com/FabLabAQ/debian-headless.git
+	cd debian-headless
+	scp chainload.kpxe chain.ipxe build/initrd.gz linux id_rsa.pub root@openwrt:/mnt/usb/tftp/
 
 
-## Dependencies
+Start the servers, making sure to enable booting from PXE just for this time (it may be necessary enabling option ROM in the BIOS).
+Once booted and reached the installer, they become available via ssh for debugging only, since the installer will proceed automatically. To discover active machines, supposing that your network is `192.168.4.0/24`, do:
 
-Make sure all necessary tools are installed:
+	nmap 192.168.4.* -p 22 --open
 
-    sudo apt-get install bsdtar syslinux syslinux-utils cpio genisoimage coreutils qemu-system qemu-system-x86 util-linux
+For example, if your host is `192.168.4.135` do:
 
-Or 
+	ssh installer@192.168.4.135
+	
+It will open the installation console, to switch between the tabs use `Ctrl A` followed by `Ctrl N` (next) or `Ctrl P` (previous). Even if the installer seems to be waiting for the user input, he's doing his work, you can see the log in the fourth tab.
 
-    make install-depends
-
-
-## Download the debian installation image
-
-Download the Debian installation image (netinst) and put it in this folder.
-
-https://www.debian.org/distrib/netinst
-
-
-## Configure some things
-
-Edit the makefile and set some variables to match your situation. e.g.
-
-    SOURCE = debian-9.5.0-amd64-netinst.iso
-    TARGET = debian-9.5.0-amd64-netinst-preseed.iso
-    ARCH = amd
-    QEMU = qemu-system-x86_64 
-    LABEL = debian-9.5.0-amd64-headless
-    USBDEV = /dev/sdc
-
-`ARCH` indicates the target processor architecture – `amd` or `386`
-This variable is used to construct the correct folder name (`install.amd`) for
-initrd. `LABEL` is the CD volume label and `USBDEV` is the device that
-represents your usb stick. The latter is needed for `make usb` and `make FAT`
-Be **extra careful** to set `USBDEV` correctly! If you set it incorrectly, you
-may overwrite your system disk!  `QEMU` is the name of the qemu-system binary
-that matches the target architecture (optional).
-
-This script comes with a few `preseed-xx_XX.cfg` files.  They contain the bare
-minimum for a headless installation. The files differ in the keymap and
-language settings. You may want to edit one of these files or create your own
-to adapt it to your needs. This is also the place to configure the login
-password for the network installation. For comprehensive information on
-preseeding study this: https://www.debian.org/releases/stable/i386/apb.html
-
-
-## Build the ISO
-
-    make clean
-    make image
-
-
-## Dry run it
-
-This step is optional but may save you a lot of trouble later on.
-
-    make qemu
-
-This will fire up a QEMU session booting your new image. You can follow the
-boot process in the emulator and eventually connect to the installer like this:
-
-    ssh installer@localhost -p10022
-
-So you can test-drive the installation before walking over to the server room.
-
-
-## Write to usb stick or burn cd
-
-If you still have a cdrom drive, use your favorite ISO burner to write the
-image to cd. I can't find my old usb-cd drive and prefer using a usb stick,
-anyway:
-
-Insert a USB stick and find out its device file
-
-    lsblk
-
-Double check, that `USBDEV` ist set correctly in the Makefile.
-
-**Caution:** The next two steps will write to the device configured in the
-`USBDEV`. If you failed to set that correctly, you will overwrite whatever disk
-happens to be associated with that device!
-
-Write the image to the stick:
-
-    make usb
-
-Add a FAT partition to the stick
-
-    make FAT
-
-This may be useful if you need to add custom firmware files or anything else
-you would like to use during installation.
-
-
-## Installation
-
-At the moment, UEFI boot is not supported so make sure you system uses
-legacy boot, by default.
-
-Insert the USB stick (or CD) in the target system and power it up. Find out the
-IP address of the machine (e.g. from the router/DHCP server). Alternatively,
-configure static IP in the preseed file. Once the system is up you should be
-able to ping it. Now log in and complete the installation:
-
-    ssh installer@yourmachine
-
-The default password is `MyGreatSecret` and can be configured in the preseeding file.
-Alternatively, set a host key in preseeding for passwordless login.
-
-BTW: my `preseed.cfg` assumes that we are connected via ethernet (as a server
-should be). If you want to/must use a wifi connection you need to configure
-this. 
+### Post-install:
+Change the temporary password and build the cluster

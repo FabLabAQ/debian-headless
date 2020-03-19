@@ -1,10 +1,11 @@
 #!ipxe
 
-set server-ip 192.168.4.176
-
 :boot_deb
-kernel memdisk
-initrd http://${server-ip}/boot/deb/buster-headless.iso
-imargs memdisk iso raw
-boot || imgfree
+initrd preseed.cfg preseed.cfg
+initrd proxmox-ve-release-6.x.gpg proxmox-ve-release-6.x.gpg
+initrd id_rsa.pub id_rsa.pub
+initrd initrd.gz
+kernel linux vga=788 auto netcfg/hostname=blade-${net0/mac:hexhyp} locale=it_IT
+boot
 goto boot_deb
+

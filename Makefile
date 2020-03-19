@@ -1,111 +1,45 @@
-include config.txt
+#include config.txt
 
-TMP = tmp
-ISOLINUX.CFG.TEMPLATE = isolinux.cfg.template
-
-
-help:
-	@echo
-	@echo "Edit config.txt, first."
-	@echo "Then use the Makefile."
-	@echo
-	@echo "Usage:"
-	@echo
-	@echo "  make install-depends	install all dependencies"
-	@echo "  make image             Build the ISO image"
-	@echo "  make qemu              Boot ISO image in qemu for testing (optional)"
-	@echo "  make usb               Write ISO to USB device"
-	@echo "  make FAT               Add a FAT partition ot the USB stick (optiona)"
-	@echo "  make clean             Clean up temp files and folders"
-	@echo "  make mrproper          make clean + remove the output ISO"
-	@echo
-	@echo "For details consult the readme.md file"
-	@echo
-
+BUILD_DIR = build
 
 install-depends:
-	# install all dependencies
-	sudo apt-get install bsdtar syslinux syslinux-utils cpio genisoimage coreutils qemu-system qemu-system-x86 util-linux
+	sudo apt install cpio pssh pscp sshpass
 
-image: clean unpack isolinux preseed md5 iso
+initrd: clean unpack preseed
 
 unpack:
-	mkdir ${TMP}
-	# Unpack the image to the folder
-	bsdtar -C ${TMP} -xf ${SOURCE}
-	# Set write permissions
-	chmod -R +w ${TMP}
-
-isolinux:
-	# Create a minimal isolinux config. no menu, no prompt
-	sed "s/ARCH/${ARCH}/" ${ISOLINUX.CFG.TEMPLATE} > ${TMP}/isolinux/isolinux.cfg
+	mkdir ${BUILD_DIR}
+	cp initrd.gz ${BUILD_DIR}/
+	chmod -R +w ${BUILD_DIR}
+	gunzip ${BUILD_DIR}/initrd.gz
 
 preseed:
-	# write the preseed file to initrd
-	gunzip ${TMP}/install.${ARCH}/initrd.gz
-	cp ${PRESEED} ${TMP}/preseed.cfg
-	cd ${TMP}; echo preseed.cfg | cpio -H newc -o -A -F install.${ARCH}/initrd
-	gzip ${TMP}/install.${ARCH}/initrd
-	rm ${TMP}/preseed.cfg
-
-md5:
-	# recreate the MD5 sums of all files
-	find ${TMP}/ -type f -exec md5sum {} \; > ${TMP}/md5sum.txt
-
-iso:
-	# create iso
-	genisoimage -V ${LABEL} \
-		-r -J -b isolinux/isolinux.bin -c isolinux/boot.cat \
-		-no-emul-boot -boot-load-size 4 -boot-info-table \
-		-o ${TARGET} ${TMP}
-	# fix MBR for USB boot
-	isohybrid ${TARGET}
-
-qemu: ${TARGET}
-	@echo
-	@echo "\nOnce the installer is in network console you can log in:"
-	@echo "    ssh installer@localhost -p10022\n"
-	# run qemu with forwarded ssh port
-	${QEMU} -m 1024 \
-		-net user,hostfwd=tcp::10022-:22 \
-		-net nic \
-		-cdrom ${TARGET}
-
-usb:
-	# write the image to usb stick
-	@echo "This will overwrite all data on ${USBDEV}!"
-	@read -p "type 'YES' if you really want me to do this:" proceed; \
-	if [ $$proceed = "YES" ] ; then \
-		sudo dd if=${TARGET} of=${USBDEV} bs=4k ; \
-		sync ; \
-	else \
-		echo "Aborting" ; \
-	fi
-
-FAT:
-	# add a FAT partition in the remaining free space 
-	# e.g. for driver files
-	@echo "This will overwrite ${USBDEV}!"
-	@read -p "type 'YES' if you really want me to do this:" proceed; \
-	if [ $$proceed = "YES" ] ; then \
-		echo " , , 0xb" | sudo sfdisk ${USBDEV} -N 2 ;\
-		sudo mkfs.vfat ${USBDEV}2 ;\
-		sync ;\
-	else \
-		echo "Aborting" ; \
-	fi
-
+	echo preseed.cfg | cpio -H newc -o -A -F ${BUILD_DIR}/initrd
+	echo proxmox-ve-release-6.x.gpg | cpio -H newc -o -A -F ${BUILD_DIR}/initrd
+	echo id_rsa.pub | cpio -H newc -o -A -F ${BUILD_DIR}/initrd
+	gzip ${BUILD_DIR}/initrd
 
 clean:
-	rm -rf ${TMP}
+	rm -rf ${BUILD_DIR}
 
-mrproper: clean
-	rm -f ${TARGET}
+SEARCH_NET ?= 192.168.0.*
+SEARCH_PORT ?= 8006
+get_ip := nmap $(SEARCH_NET) -p $(SEARCH_PORT) --open -oG - | awk '/$(SEARCH_PORT)\/open.*/{print $$2}'
 
-NETWORK_IP ?= 192.168.4.*
-get_ip := nmap $(NETWORK_IP) -p22 --open -oG - | awk '/22\/open.*/{print $$2}'
+passwd:
+	@read -sp "New password:" NEW_PASSWORD; \
+	parallel-ssh -O StrictHostKeyChecking=no -H "$$(${get_ip})" -l root "echo root:$$NEW_PASSWORD | chpasswd"
 
-get_hosts:
-	@$(get_ip)
+START_IP ?= 10
+END_IP ?= 19
 
+reorder-ip:
+	START_IP=${START_IP}; \
+	IP_LIST="$$(${get_ip})"; \
+	for i in {$(START_IP)..$(END_IP)}; do \
+		ssh -o StrictHostKeyChecking=no root@$${IP_LIST[""$$(($$i-$$START_IP))""]} "sed 's/192.168.4.*/192.168.4.$$i/' /etc/hosts"; \
+	done
+
+#cluster:
+	
 # EOF
